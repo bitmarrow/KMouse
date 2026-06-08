@@ -1,7 +1,7 @@
-//! 九宫格透明覆盖窗口和 GDI 绘制。
+//! 81 宫格透明覆盖窗口和 GDI 绘制。
 //!
 //! 覆盖窗口始终位于普通窗口上方，但不获取焦点且允许鼠标点击穿透。
-//! 黑色被配置为透明色键，红色线条和数字则作为可见的九宫格提示。
+//! 黑色被配置为透明色键，红色线条和数字则作为可见的 81 宫格提示。
 
 use std::mem::MaybeUninit;
 use std::ptr;
@@ -20,8 +20,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 
-use crate::config::MAX_GRID_DEPTH;
-use crate::grid::{cell_rect, to_client_rect, virtual_screen_rect};
+use crate::grid::{Grid, cell_rect, row_rect, to_client_rect, virtual_screen_rect};
 use crate::state;
 
 /// 全局保存覆盖窗口句柄。
@@ -31,7 +30,7 @@ static OVERLAY_HWND: AtomicIsize = AtomicIsize::new(0);
 
 /// 创建并保存覆盖窗口。
 ///
-/// 成功返回 `true`；失败返回 `false`，此时九宫格功能无法工作。
+/// 成功返回 `true`；失败返回 `false`，此时 81 宫格功能无法工作。
 pub fn init(instance: HINSTANCE) -> bool {
     let hwnd = unsafe { create_overlay_window(instance) };
     if hwnd.is_null() {
@@ -61,7 +60,7 @@ pub fn show() {
             screen.bottom - screen.top,
             SWP_NOACTIVATE | SWP_SHOWWINDOW,
         );
-        // SW_SHOWNOACTIVATE 保证显示九宫格时不会抢走前台程序焦点。
+        // SW_SHOWNOACTIVATE 保证显示 81 宫格时不会抢走前台程序焦点。
         ShowWindow(hwnd, SW_SHOWNOACTIVATE);
         InvalidateRect(hwnd, ptr::null::<RECT>(), 1 as BOOL);
     }
@@ -95,7 +94,7 @@ unsafe extern "system" fn overlay_proc(
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
-/// 响应 WM_PAINT，清空旧画面并绘制当前九宫格。
+/// 响应 WM_PAINT，清空旧画面并绘制当前 81 宫格。
 fn paint(hwnd: HWND) {
     unsafe {
         // BeginPaint/EndPaint 必须成对调用，Windows 才会清除窗口的无效区域标记。
@@ -120,8 +119,13 @@ fn paint(hwnd: HWND) {
         if let Some(app) = state::lock()
             && let Some(grid) = app.grid
         {
-            let rect = to_client_rect(grid.rect, screen);
-            draw_grid(dc, rect, grid.depth);
+            draw_grid(
+                dc,
+                Grid {
+                    rect: to_client_rect(grid.rect, screen),
+                    ..grid
+                },
+            );
         }
 
         EndPaint(hwnd, &paint);
@@ -149,7 +153,7 @@ unsafe fn create_overlay_window(instance: HINSTANCE) -> HWND {
 
         let screen = virtual_screen_rect();
         // LAYERED 支持颜色键透明；TRANSPARENT 允许点击穿透；
-        // TOOLWINDOW 避免出现在 Alt+Tab；TOPMOST 保证九宫格可见。
+        // TOOLWINDOW 避免出现在 Alt+Tab；TOPMOST 保证 81 宫格可见。
         let hwnd = CreateWindowExW(
             WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
             class_name.as_ptr(),
@@ -166,7 +170,7 @@ unsafe fn create_overlay_window(instance: HINSTANCE) -> HWND {
         );
 
         if !hwnd.is_null() {
-            // 将黑色设为完全透明，红色九宫格仍保持可见。
+            // 将黑色设为完全透明，红色 81 宫格仍保持可见。
             SetLayeredWindowAttributes(hwnd, 0x00000000, 255, LWA_COLORKEY);
             ShowWindow(hwnd, SW_HIDE);
         }
@@ -175,55 +179,71 @@ unsafe fn create_overlay_window(instance: HINSTANCE) -> HWND {
     }
 }
 
-/// 绘制当前选区外框、内部九宫格和数字提示。
-fn draw_grid(dc: HDC, rect: RECT, depth: u8) {
+/// 根据输入阶段绘制完整 81 宫格、选中行或最终单元格。
+fn draw_grid(dc: HDC, grid: Grid) {
     unsafe {
-        // COLORREF 使用 0x00BBGGRR，因此 0x000000ff 表示红色。
-        let pen = CreatePen(PS_SOLID, 3, 0x000000ff);
-        let old_pen = SelectObject(dc, pen as HGDIOBJ);
         let old_brush = SelectObject(dc, GetStockObject(HOLLOW_BRUSH) as HBRUSH as HGDIOBJ);
-
-        Rectangle(dc, rect.left, rect.top, rect.right, rect.bottom);
-
-        // 达到最大深度后只显示选区外框和 Enter，不再提示继续细分。
-        if depth < MAX_GRID_DEPTH {
-            draw_grid_lines(dc, rect);
-        }
 
         SetBkMode(dc, TRANSPARENT as i32);
         SetTextColor(dc, 0x000000ff);
 
-        if depth < MAX_GRID_DEPTH {
-            for number in 1..=9 {
-                let cell = cell_rect(rect, number);
-                draw_centered_text(dc, cell, &number.to_string());
+        match (grid.row, grid.col) {
+            (None, _) => {
+                draw_grid_lines(dc, grid.rect);
+                for row in 1..=9 {
+                    draw_centered_text(dc, cell_rect(grid.rect, row, 1), &row.to_string());
+                }
             }
-        } else {
-            draw_text(dc, rect.left + 12, rect.top + 12, "Enter");
+            (Some(row), None) => {
+                draw_grid_lines(dc, grid.rect);
+                draw_highlight_rect(dc, row_rect(grid.rect, row));
+                for col in 1..=9 {
+                    draw_centered_text(dc, cell_rect(grid.rect, row, col), &col.to_string());
+                }
+            }
+            (Some(row), Some(col)) => {
+                let cell = cell_rect(grid.rect, row, col);
+                draw_highlight_rect(dc, cell);
+                draw_text(dc, cell.left + 12, cell.top + 12, "Enter");
+            }
         }
 
-        // 恢复原 GDI 对象后再删除自建画笔，避免资源泄漏或删除正在使用的对象。
         SelectObject(dc, old_brush);
+    }
+}
+
+/// 绘制 9 行 9 列的完整 81 宫格。
+fn draw_grid_lines(dc: HDC, rect: RECT) {
+    unsafe {
+        let pen = CreatePen(PS_SOLID, 1, 0x000000ff);
+        let old_pen = SelectObject(dc, pen as HGDIOBJ);
+        let cell_width = (rect.right - rect.left) / 9;
+        let cell_height = (rect.bottom - rect.top) / 9;
+
+        Rectangle(dc, rect.left, rect.top, rect.right, rect.bottom);
+        for i in 1..9 {
+            let x = rect.left + cell_width * i;
+            MoveToEx(dc, x, rect.top, ptr::null_mut::<POINT>());
+            LineTo(dc, x, rect.bottom);
+
+            let y = rect.top + cell_height * i;
+            MoveToEx(dc, rect.left, y, ptr::null_mut::<POINT>());
+            LineTo(dc, rect.right, y);
+        }
+
         SelectObject(dc, old_pen);
         DeleteObject(pen as HGDIOBJ);
     }
 }
 
-/// 绘制九宫格内部的两条竖线和两条横线。
-fn draw_grid_lines(dc: HDC, rect: RECT) {
+/// 使用较粗画笔突出当前选择的行或最终单元格。
+fn draw_highlight_rect(dc: HDC, rect: RECT) {
     unsafe {
-        let third_w = (rect.right - rect.left) / 3;
-        let third_h = (rect.bottom - rect.top) / 3;
-
-        for i in 1..3 {
-            let x = rect.left + third_w * i;
-            MoveToEx(dc, x, rect.top, ptr::null_mut::<POINT>());
-            LineTo(dc, x, rect.bottom);
-
-            let y = rect.top + third_h * i;
-            MoveToEx(dc, rect.left, y, ptr::null_mut::<POINT>());
-            LineTo(dc, rect.right, y);
-        }
+        let pen = CreatePen(PS_SOLID, 4, 0x000000ff);
+        let old_pen = SelectObject(dc, pen as HGDIOBJ);
+        Rectangle(dc, rect.left, rect.top, rect.right, rect.bottom);
+        SelectObject(dc, old_pen);
+        DeleteObject(pen as HGDIOBJ);
     }
 }
 

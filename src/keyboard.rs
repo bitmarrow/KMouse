@@ -5,7 +5,9 @@
 
 use windows_sys::Win32::Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, VK_CONTROL, VK_DOWN, VK_LEFT, VK_LWIN, VK_RETURN, VK_RIGHT, VK_RWIN, VK_UP,
+    GetKeyState, VK_CONTROL, VK_DOWN, VK_LEFT, VK_LWIN, VK_NUMLOCK, VK_NUMPAD1, VK_NUMPAD2,
+    VK_NUMPAD3, VK_NUMPAD4, VK_NUMPAD5, VK_NUMPAD6, VK_NUMPAD7, VK_NUMPAD8, VK_NUMPAD9, VK_RETURN,
+    VK_RIGHT, VK_RWIN, VK_UP,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, HHOOK, KBDLLHOOKSTRUCT, SetWindowsHookExW, UnhookWindowsHookEx, WH_KEYBOARD_LL,
@@ -13,10 +15,9 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::config::{
-    MAX_GRID_DEPTH, VK_1, VK_9, VK_A, VK_D, VK_F, VK_M, VK_OEM_2, VK_Q, VK_S, VK_W, VK_X, VK_Z,
-    WHEEL_DELTA,
+    VK_1, VK_9, VK_A, VK_D, VK_F, VK_M, VK_OEM_2, VK_Q, VK_S, VK_W, VK_X, VK_Z, WHEEL_DELTA,
 };
-use crate::grid::{Grid, cell_rect, virtual_screen_rect};
+use crate::grid::{Grid, target_rect, virtual_screen_rect};
 use crate::mouse::{self, MouseButton};
 use crate::overlay;
 use crate::state::{self, AppState};
@@ -95,17 +96,21 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
 ///
 /// 返回 `true` 表示该按键已被 KMouse 消费，应由钩子吞掉原始事件。
 fn handle_pressed(vk: u32, dpi_key: bool, app: &mut AppState) -> bool {
-    // 九宫格命令优先于普通映射，确保数字与 Enter 只控制定位流程。
+    // 81 宫格命令优先于普通映射，确保数字与 Enter 只控制定位流程。
     if let Some(grid) = app.grid {
-        if (VK_1..=VK_9).contains(&vk) {
-            choose_grid_cell(app, grid, (vk - VK_1 + 1) as u8);
+        if let Some(number) = grid_number(vk) {
+            if !app.grid_number_down {
+                app.grid_number_down = true;
+                select_grid_number(app, grid, number);
+            }
             return true;
         }
 
-        // Enter 确认当前区域中心并退出九宫格，但不会关闭整个鼠标模式。
+        // Enter 确认当前目标区域中心并退出 81 宫格，但不会关闭整个鼠标模式。
         if vk == VK_RETURN as u32 {
-            mouse::move_to_rect_center(grid.rect);
+            mouse::move_to_rect_center(target_rect(grid));
             app.grid = None;
+            app.grid_number_down = false;
             overlay::hide();
             println!("grid mode: off");
             return true;
@@ -150,23 +155,23 @@ fn handle_pressed(vk: u32, dpi_key: bool, app: &mut AppState) -> bool {
             true
         }
         VK_A => {
-            mouse::button_down(MouseButton::Left);
+            button_down_once(app, MouseButton::Left);
             true
         }
         VK_S => {
-            mouse::button_down(MouseButton::Right);
+            button_down_once(app, MouseButton::Right);
             true
         }
         VK_D => {
-            mouse::button_down(MouseButton::Middle);
+            button_down_once(app, MouseButton::Middle);
             true
         }
         VK_Q => {
-            mouse::button_down(MouseButton::Back);
+            button_down_once(app, MouseButton::Back);
             true
         }
         VK_W => {
-            mouse::button_down(MouseButton::Forward);
+            button_down_once(app, MouseButton::Forward);
             true
         }
         _ => false,
@@ -177,6 +182,12 @@ fn handle_pressed(vk: u32, dpi_key: bool, app: &mut AppState) -> bool {
 ///
 /// 滚轮层在释放 Z/X 时关闭；鼠标按钮映射在释放时发送对应的按钮抬起事件。
 fn handle_released(vk: u32, dpi_key: bool, app: &mut AppState) -> bool {
+    // 81 宫格数字必须释放后才能输入下一位，避免一次长按同时选择行和列。
+    if app.grid.is_some() && grid_number(vk).is_some() {
+        app.grid_number_down = false;
+        return true;
+    }
+
     // DPI 已在按下时切换，释放事件仅需吞掉，防止 `/` 输入到前台程序。
     if dpi_key {
         return true;
@@ -192,26 +203,44 @@ fn handle_released(vk: u32, dpi_key: bool, app: &mut AppState) -> bool {
             true
         }
         VK_A => {
-            mouse::button_up(MouseButton::Left);
+            button_up_once(app, MouseButton::Left);
             true
         }
         VK_S => {
-            mouse::button_up(MouseButton::Right);
+            button_up_once(app, MouseButton::Right);
             true
         }
         VK_D => {
-            mouse::button_up(MouseButton::Middle);
+            button_up_once(app, MouseButton::Middle);
             true
         }
         VK_Q => {
-            mouse::button_up(MouseButton::Back);
+            button_up_once(app, MouseButton::Back);
             true
         }
         VK_W => {
-            mouse::button_up(MouseButton::Forward);
+            button_up_once(app, MouseButton::Forward);
             true
         }
         _ => false,
+    }
+}
+
+/// 仅在按钮尚未按下时发送一次按下事件，过滤键盘长按产生的自动重复。
+fn button_down_once(app: &mut AppState, button: MouseButton) {
+    let index = button.index();
+    if !app.mouse_buttons_down[index] {
+        app.mouse_buttons_down[index] = true;
+        mouse::button_down(button);
+    }
+}
+
+/// 仅在按钮已按下时发送一次释放事件。
+fn button_up_once(app: &mut AppState, button: MouseButton) {
+    let index = button.index();
+    if app.mouse_buttons_down[index] {
+        app.mouse_buttons_down[index] = false;
+        mouse::button_up(button);
     }
 }
 
@@ -238,31 +267,64 @@ fn arrow_action(dx: i32, dy: i32, app: &AppState) {
     mouse::move_relative(dx * step, dy * step);
 }
 
-/// 从整个虚拟桌面开始新的九宫格定位流程。
+/// 从整个虚拟桌面开始新的 81 宫格定位流程。
 fn start_grid(app: &mut AppState) {
     app.grid = Some(Grid {
         rect: virtual_screen_rect(),
-        depth: 0,
+        row: None,
+        col: None,
     });
+    app.grid_number_down = false;
     overlay::show();
 }
 
-/// 选择当前九宫格中的一个区域并进入下一层。
-fn choose_grid_cell(app: &mut AppState, grid: Grid, number: u8) {
-    // 达到最大深度后忽略数字键，等待用户按 Enter 确认。
-    if grid.depth >= MAX_GRID_DEPTH {
-        return;
+/// 按输入阶段将数字解释为行号或列号。
+fn select_grid_number(app: &mut AppState, grid: Grid, number: u8) {
+    let next = match (grid.row, grid.col) {
+        (None, _) => Grid {
+            row: Some(number),
+            ..grid
+        },
+        (Some(_), None) => Grid {
+            col: Some(number),
+            ..grid
+        },
+        (Some(_), Some(_)) => return,
+    };
+
+    // 选择行后移动到该行中心；选择列后移动到最终单元格中心。
+    mouse::move_to_rect_center(target_rect(next));
+    app.grid = Some(next);
+    overlay::show();
+}
+
+/// 将主键盘或已开启 Num Lock 的数字小键盘按键转换为 1..=9。
+fn grid_number(vk: u32) -> Option<u8> {
+    if (VK_1..=VK_9).contains(&vk) {
+        return Some((vk - VK_1 + 1) as u8);
     }
 
-    // 鼠标立即移动到所选格中心，覆盖窗口随后只绘制该区域内的新九宫格。
-    let next = cell_rect(grid.rect, number);
-    mouse::move_to_rect_center(next);
+    if !num_lock_is_on() {
+        return None;
+    }
 
-    app.grid = Some(Grid {
-        rect: next,
-        depth: grid.depth + 1,
-    });
-    overlay::show();
+    match vk as u16 {
+        VK_NUMPAD1 => Some(1),
+        VK_NUMPAD2 => Some(2),
+        VK_NUMPAD3 => Some(3),
+        VK_NUMPAD4 => Some(4),
+        VK_NUMPAD5 => Some(5),
+        VK_NUMPAD6 => Some(6),
+        VK_NUMPAD7 => Some(7),
+        VK_NUMPAD8 => Some(8),
+        VK_NUMPAD9 => Some(9),
+        _ => None,
+    }
+}
+
+/// 判断 Num Lock 是否处于开启状态；最低位为 1 表示切换状态已开启。
+fn num_lock_is_on() -> bool {
+    unsafe { GetKeyState(VK_NUMLOCK as i32) & 1 != 0 }
 }
 
 /// 判断 Ctrl 修饰键当前是否按下。

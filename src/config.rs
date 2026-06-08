@@ -1,7 +1,7 @@
 //! KMouse 的键位映射和行为参数。
 //!
 //! 将可调参数集中在本模块，可以在不修改事件处理流程的情况下调整快捷键、
-//! 鼠标移动速度、DPI 档位、滚轮步长和九宫格最大细分深度。
+//! 鼠标移动速度、DPI 档位和滚轮步长。
 
 // 字母键对应的 Windows 虚拟键码。
 pub const VK_A: u32 = 0x41;
@@ -14,7 +14,7 @@ pub const VK_W: u32 = 0x57;
 pub const VK_X: u32 = 0x58;
 pub const VK_Z: u32 = 0x5A;
 
-// 九宫格数字选择范围。
+// 81 宫格行列数字选择范围。
 pub const VK_1: u32 = 0x31;
 pub const VK_9: u32 = 0x39;
 
@@ -32,6 +32,3 @@ pub const DEFAULT_DPI_INDEX: usize = 1;
 
 /// 单次标准滚轮事件使用的增量值。
 pub const WHEEL_DELTA: i32 = 120;
-
-/// 九宫格允许的最大细分层数，防止选区无限缩小。
-pub const MAX_GRID_DEPTH: u8 = 4;

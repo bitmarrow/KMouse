@@ -7,6 +7,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use crate::config::{BASE_MOVE, DEFAULT_DPI_INDEX, DPI_LEVELS};
 use crate::grid::Grid;
+use crate::mouse::{self, MouseButton};
 use crate::overlay;
 use crate::tray;
 
@@ -22,8 +23,12 @@ pub struct AppState {
     pub vertical_wheel: bool,
     /// X 键是否按住；启用时左右方向键转换为水平滚轮。
     pub horizontal_wheel: bool,
-    /// 当前九宫格选区；`None` 表示未处于九宫格模式。
+    /// 当前 81 宫格选区；`None` 表示未处于定位模式。
     pub grid: Option<Grid>,
+    /// 数字键是否仍处于按下状态，用于阻止键盘自动重复同时选择行和列。
+    pub grid_number_down: bool,
+    /// 五种鼠标按钮当前是否已发送按下事件，用于过滤键盘自动重复。
+    pub mouse_buttons_down: [bool; 5],
 }
 
 impl AppState {
@@ -35,6 +40,8 @@ impl AppState {
             vertical_wheel: false,
             horizontal_wheel: false,
             grid: None,
+            grid_number_down: false,
+            mouse_buttons_down: [false; 5],
         }
     }
 
@@ -64,12 +71,23 @@ pub fn lock() -> Option<MutexGuard<'static, AppState>> {
         .map(|state| state.lock().expect("state mutex poisoned"))
 }
 
-/// 开启或关闭鼠标模式，并同步清理九宫格和更新托盘图标。
+/// 开启或关闭鼠标模式，并同步清理 81 宫格和更新托盘图标。
 pub fn set_mouse_mode(enabled: bool) {
+    let mut buttons_to_release = [false; 5];
     // 先在短持锁区间内更新纯状态，再执行可能触发 Windows 消息的 UI 操作。
     if let Some(mut app) = lock() {
         app.mouse_mode = enabled;
         app.grid = None;
+        app.grid_number_down = false;
+        buttons_to_release = app.mouse_buttons_down;
+        app.mouse_buttons_down = [false; 5];
+    }
+
+    // 模式切换时释放仍按住的虚拟鼠标按钮，避免按钮在系统中保持按下状态。
+    for button in MouseButton::ALL {
+        if buttons_to_release[button.index()] {
+            mouse::button_up(button);
+        }
     }
 
     overlay::hide();

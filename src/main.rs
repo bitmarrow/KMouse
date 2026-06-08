@@ -3,7 +3,7 @@
 //! KMouse 程序入口。
 //!
 //! 本模块负责按照正确顺序初始化进程级资源，并运行 Windows 消息循环。
-//! 具体的键盘钩子、鼠标事件、九宫格绘制、共享状态和托盘功能分别由独立模块实现。
+//! 具体的键盘钩子、鼠标事件、81 宫格绘制、共享状态和托盘功能分别由独立模块实现。
 
 mod config;
 mod grid;
@@ -27,7 +27,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 
 fn main() {
     // 覆盖窗口和 SendInput 都使用物理/虚拟桌面坐标。提前启用每显示器 DPI 感知，
-    // 可以避免 Windows 自动缩放窗口坐标后造成九宫格与鼠标位置不一致。
+    // 可以避免 Windows 自动缩放窗口坐标后造成 81 宫格与鼠标位置不一致。
     unsafe {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     }
@@ -38,7 +38,7 @@ fn main() {
     // 当前模块句柄用于注册窗口类和安装全局低级键盘钩子。
     let module = unsafe { GetModuleHandleW(ptr::null()) };
 
-    // 覆盖窗口负责显示九宫格；创建失败时程序无法提供完整功能，因此直接退出。
+    // 覆盖窗口负责显示 81 宫格；创建失败时程序无法提供完整功能，因此直接退出。
     if !overlay::init(module as _) {
         eprintln!("failed to create overlay window");
         return;

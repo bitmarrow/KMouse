@@ -17,6 +17,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{XBUTTON1, XBUTTON2};
 use crate::grid::virtual_screen_rect;
 
 /// KMouse 支持映射的鼠标按钮。
+#[derive(Clone, Copy)]
 pub enum MouseButton {
     /// 鼠标左键。
     Left,
@@ -31,6 +32,26 @@ pub enum MouseButton {
 }
 
 impl MouseButton {
+    /// 所有鼠标按钮，顺序与 `index` 返回的索引保持一致。
+    pub const ALL: [Self; 5] = [
+        Self::Left,
+        Self::Right,
+        Self::Middle,
+        Self::Back,
+        Self::Forward,
+    ];
+
+    /// 返回按钮在应用按住状态数组中的固定索引。
+    pub fn index(self) -> usize {
+        match self {
+            Self::Left => 0,
+            Self::Right => 1,
+            Self::Middle => 2,
+            Self::Back => 3,
+            Self::Forward => 4,
+        }
+    }
+
     /// 返回按钮按下事件所需的 SendInput 标志和附加数据。
     fn down_flags(&self) -> (u32, u32) {
         match self {
