@@ -5,9 +5,9 @@
 
 use windows_sys::Win32::Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, VK_CONTROL, VK_DOWN, VK_LEFT, VK_LWIN, VK_NUMLOCK, VK_NUMPAD1, VK_NUMPAD2,
-    VK_NUMPAD3, VK_NUMPAD4, VK_NUMPAD5, VK_NUMPAD6, VK_NUMPAD7, VK_NUMPAD8, VK_NUMPAD9, VK_RETURN,
-    VK_RIGHT, VK_RWIN, VK_UP,
+    GetKeyState, VK_CONTROL, VK_DOWN, VK_LEFT, VK_LWIN, VK_MENU, VK_NUMLOCK, VK_NUMPAD1,
+    VK_NUMPAD2, VK_NUMPAD3, VK_NUMPAD4, VK_NUMPAD5, VK_NUMPAD6, VK_NUMPAD7, VK_NUMPAD8,
+    VK_NUMPAD9, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_RWIN, VK_UP,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, HHOOK, KBDLLHOOKSTRUCT, SetWindowsHookExW, UnhookWindowsHookEx, WH_KEYBOARD_LL,
@@ -69,6 +69,11 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
 
     // 放行所有 Win 组合键，例如 Win+D。否则映射为中键的 D 会破坏系统快捷键。
     if win_is_down() {
+        return unsafe { CallNextHookEx(0 as HHOOK, code, wparam, lparam) };
+    }
+
+    // 放行 Ctrl/Alt/Shift 组合键，避免鼠标模式拦截 `Ctrl+A`、`Alt+F`、`Shift+Z` 等快捷键。
+    if modifier_is_down() {
         return unsafe { CallNextHookEx(0 as HHOOK, code, wparam, lparam) };
     }
 
@@ -330,6 +335,21 @@ fn num_lock_is_on() -> bool {
 /// 判断 Ctrl 修饰键当前是否按下。
 fn ctrl_is_down() -> bool {
     unsafe { GetKeyState(VK_CONTROL as i32) < 0 }
+}
+
+/// 判断 Alt 修饰键当前是否按下。
+fn alt_is_down() -> bool {
+    unsafe { GetKeyState(VK_MENU as i32) < 0 }
+}
+
+/// 判断 Shift 修饰键当前是否按下。
+fn shift_is_down() -> bool {
+    unsafe { GetKeyState(VK_SHIFT as i32) < 0 }
+}
+
+/// 判断任意 Ctrl/Alt/Shift 是否按下。
+fn modifier_is_down() -> bool {
+    ctrl_is_down() || alt_is_down() || shift_is_down()
 }
 
 /// 判断左或右 Windows 键当前是否按下。
